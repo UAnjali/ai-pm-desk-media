@@ -1,0 +1,26 @@
+name: Exact-time dispatcher
+
+# Every 2 hours (UTC, off-minute). Each run covers the next 5.5 hours, so even a run that
+# starts hours late leaves no gap; one run at a time, and duplicates are harmless.
+on:
+  schedule:
+    - cron: "7 */2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dispatcher
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 345
+    steps:
+      - uses: actions/checkout@v4
+      - name: Wait and trigger studio-engine
+        env:
+          STUDIO_ENGINE_TOKEN: ${{ secrets.STUDIO_ENGINE_TOKEN }}
+        run: python3 dispatcher/dispatch.py
