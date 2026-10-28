@@ -1,10 +1,14 @@
 name: Exact-time dispatcher
 
-# Every 2 hours (UTC, off-minute). Each run covers the next 5.5 hours, so even a run that
-# starts hours late leaves no gap; one run at a time, and duplicates are harmless.
+# GitHub's scheduler can drop runs for hours, so this does not rely on any one of them.
+# Twice an hour (off-minutes) a short run checks the calendar. Whenever a post is due within
+# 24 hours, the run stays awake and starts its own next run before it ends (a relay that
+# does not go through the scheduler), and it re-triggers anything that did not happen.
+# One run at a time; a newer waiting run replaces an older one, and duplicates are harmless.
 on:
   schedule:
-    - cron: "7 */2 * * *"
+    - cron: "13 * * * *"
+    - cron: "43 * * * *"
   workflow_dispatch:
     inputs:
       check_only:
@@ -14,6 +18,7 @@ on:
 
 permissions:
   contents: read
+  actions: write       # the relay starts this workflow's next run
 
 concurrency:
   group: dispatcher
@@ -29,4 +34,5 @@ jobs:
         env:
           STUDIO_ENGINE_TOKEN: ${{ secrets.STUDIO_ENGINE_TOKEN }}
           CHECK_ONLY: ${{ inputs.check_only }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: python3 dispatcher/dispatch.py
