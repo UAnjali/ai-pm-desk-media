@@ -11,6 +11,8 @@ single scheduled run. Three layers:
 2. Catch-up: after each event it checks that the work actually happened (published.json
    for a post, a snapshot in insights.json for insights) and re-triggers if it did not,
    up to a limit, so a dropped or failed run is retried instead of skipped.
+   The same applies, from 4 hours ahead, to insights checkpoints (on 29 Oct a 24 h snapshot
+   ran 6 hours late when the scheduler dropped runs again).
 3. The schedule below runs often, to start a relay (or catch up) as early as possible.
 
 It triggers in studio-engine:
@@ -40,6 +42,7 @@ PUBLISH_LEAD = dt.timedelta(minutes=25)
 INSIGHTS_DELAYS = (dt.timedelta(hours=24), dt.timedelta(hours=72))
 RUN_LENGTH = dt.timedelta(minutes=330)        # stays under GitHub's 6-hour job limit
 RELAY_AHEAD = dt.timedelta(hours=24)          # keep the relay going while a post is due this soon
+INSIGHTS_RELAY_AHEAD = dt.timedelta(hours=4)  # and while an insights checkpoint is this close
 POLL = dt.timedelta(minutes=5)
 
 # Catch-up: how late an event may still be done, how long to give a run before checking,
@@ -187,7 +190,8 @@ def main():
         events = all_events(token)                    # re-read each round: the calendar can change
         watching = [e for e in events if e[0] <= now and handle(token, e, now)]
         upcoming = [e for e in events if e[0] > now]
-        post_soon = any(kind == "publish" and when - now <= RELAY_AHEAD for when, kind, _, _ in upcoming)
+        post_soon = any(when - now <= (RELAY_AHEAD if kind == "publish" else INSIGHTS_RELAY_AHEAD)
+                        for when, kind, _, _ in upcoming)
         if not watching and not post_soon:
             print("nothing due in the next 24 hours; the schedule will start the next run")
             return
