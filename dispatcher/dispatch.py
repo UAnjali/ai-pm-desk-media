@@ -53,16 +53,31 @@ SETTLE = dt.timedelta(minutes=10)
 MAX_RUNS = 3
 
 
+API_TRIES = 4                                  # GitHub's API sometimes answers 500 or times out
+
+
 def api(path, token, body=None, repo=REPO):
-    req = urllib.request.Request(
-        f"https://api.github.com/repos/{repo}/{path}",
-        data=json.dumps(body).encode() if body is not None else None,
-        method="POST" if body is not None else "GET",
-        headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"},
-    )
-    with urllib.request.urlopen(req, timeout=60) as resp:
-        raw = resp.read()
-        return json.loads(raw) if raw else None
+    """GitHub REST call. Retries server errors and network failures; 4xx errors are raised at once."""
+    for attempt in range(API_TRIES):
+        req = urllib.request.Request(
+            f"https://api.github.com/repos/{repo}/{path}",
+            data=json.dumps(body).encode() if body is not None else None,
+            method="POST" if body is not None else "GET",
+            headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                raw = resp.read()
+                return json.loads(raw) if raw else None
+        except urllib.error.HTTPError as exc:
+            if exc.code < 500 or attempt == API_TRIES - 1:
+                raise
+            print(f"api: HTTP {exc.code}, retrying")
+        except (urllib.error.URLError, TimeoutError) as exc:
+            if attempt == API_TRIES - 1:
+                raise
+            print(f"api: {type(exc).__name__}, retrying")
+        time.sleep(10 * 2 ** attempt)
 
 
 def file_text(token, path):
@@ -187,8 +202,18 @@ def main():
     deadline = start + RUN_LENGTH
     while True:
         now = dt.datetime.now(dt.timezone.utc)
-        events = all_events(token)                    # re-read each round: the calendar can change
-        watching = [e for e in events if e[0] <= now and handle(token, e, now)]
+        try:
+            events = all_events(token)                # re-read each round: the calendar can change
+            watching = [e for e in events if e[0] <= now and handle(token, e, now)]
+        except (urllib.error.URLError, TimeoutError, ValueError) as exc:
+            # On 3 Nov an API 500 here ended the run, and with it the relay: a post went out 67 minutes
+            # late. Keep the loop (and the relay) alive and try again next round.
+            print(f"round failed ({type(exc).__name__}: {exc}); retrying in {POLL.seconds // 60} minutes")
+            if now + POLL >= deadline:
+                relay(now)
+                return
+            time.sleep(POLL.total_seconds())
+            continue
         upcoming = [e for e in events if e[0] > now]
         post_soon = any(when - now <= (RELAY_AHEAD if kind == "publish" else INSIGHTS_RELAY_AHEAD)
                         for when, kind, _, _ in upcoming)
