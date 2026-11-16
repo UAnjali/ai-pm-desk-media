@@ -17,7 +17,7 @@ single scheduled run. Three layers:
 
 It triggers in studio-engine:
   - publish.yml 25 minutes before a slot (it prepares the reel and posts at the exact minute)
-  - insights.yml 24 h and 72 h after a slot (numbers and learnings for the next reels)
+  - insights.yml 24 h and 72 h after a reel actually posted, only for reels that posted (two reviews per reel)
 Duplicate triggers are harmless: studio-engine skips reels already posted or snapshotted.
 
 Logs here are public, so this prints only times, event types and reel IDs, never topics.
@@ -137,12 +137,22 @@ def trigger(token, kind, reel, on_time):
 def handle(token, event, now):
     """Fire or catch up one event that is due. Returns True while it still needs watching."""
     when, kind, reel, slot = event
+    if kind == "insights":
+        # Review only reels that actually posted, timed from when they posted (a reel can go out late),
+        # and at most twice per reel (24 h and 72 h; studio-engine's insights.py enforces the same cap).
+        raw = file_text(token, f"reels/{reel}/published.json")
+        if raw is None:
+            return False                              # never posted (no script or not approved): nothing to review
+        posted = dt.datetime.fromisoformat(json.loads(raw)["published_at"])
+        when = posted + (when - slot)
+        if now < when - dt.timedelta(minutes=30):
+            return True                               # posted late: wait for the real checkpoint
     limit = slot + PUBLISH_CATCHUP if kind == "publish" else when + INSIGHTS_CATCHUP
     if now > limit:
         return False
     if is_done(token, kind, reel, when):
         return False
-    runs = runs_since(token, kind, when - dt.timedelta(minutes=5))
+    runs = runs_since(token, kind, when - dt.timedelta(minutes=35 if kind == "insights" else 5))
     if any(r["status"] != "completed" for r in runs):
         return True                                   # a run is queued or working; give it time
     tries = [r for r in runs if r["event"] == "workflow_dispatch"]
